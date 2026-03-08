@@ -1,0 +1,712 @@
+diff --git a/pinot-common/src/test/java/org/apache/pinot/common/function/JsonFunctionsTest.java b/pinot-common/src/test/java/org/apache/pinot/common/function/JsonFunctionsTest.java
+index 9e77293d2c..e85c3bb0d1 100644
+--- a/pinot-common/src/test/java/org/apache/pinot/common/function/JsonFunctionsTest.java
++++ b/pinot-common/src/test/java/org/apache/pinot/common/function/JsonFunctionsTest.java
+@@ -22,6 +22,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
+ import com.google.common.collect.ImmutableList;
+ import com.google.common.collect.ImmutableMap;
+ import com.jayway.jsonpath.InvalidJsonException;
++import java.io.IOException;
+ import java.util.ArrayList;
+ import java.util.Arrays;
+ import java.util.List;
+@@ -448,7 +449,264 @@ public class JsonFunctionsTest {
+     assertEquals(JsonFunctions.jsonStringToListOrMap(jsonMapString), expectedMap);
+ 
+     String invalidJson = "[\"k1\":\"v1\"}";
+-    assertEquals(JsonFunctions.jsonStringToMap(invalidJson), null);
+-    assertEquals(JsonFunctions.jsonStringToListOrMap(invalidJson), null);
++    assertNull(JsonFunctions.jsonStringToMap(invalidJson));
++    assertNull(JsonFunctions.jsonStringToListOrMap(invalidJson));
++  }
++
++  @Test
++  public void testJsonKeysFlatAndNested()
++      throws IOException {
++    String flatJson = "{\"a\":1,\"b\":2}";
++    String nestedJson = "{\"a\":1,\"b\":{\"c\":2,\"d\":3},\"f\":4}";
++
++    // For extracting all keys at all levels, use $..**
++    Assert.assertEqualsNoOrder(JsonFunctions.jsonExtractKey(flatJson, "$..**", "maxDepth=1").toArray(),
++        new String[]{"$['a']", "$['b']"});
++
++    // Test with nested JSON - $.** should give us all paths
++    List<String> nestedResult = JsonFunctions.jsonExtractKey(nestedJson, "$..**", "maxDepth=2");
++    System.out.println("Nested result: " + nestedResult);
++
++    // Just test that we get some results for now
++    Assert.assertTrue(nestedResult.size() > 0);
++  }
++
++  @Test
++  public void testJsonKeysArrayAndNull()
++      throws IOException {
++    String arrayJson = "[{\"a\":1},{\"b\":2}]";
++    List<String> result = JsonFunctions.jsonExtractKey(arrayJson, "$..**", "maxDepth=2");
++    System.out.println("Array result: " + result);
++
++    // Test null and invalid cases
++    Assert.assertEquals(JsonFunctions.jsonExtractKey(null, "$..**", "maxDepth=2").size(), 0);
++    Assert.assertEquals(JsonFunctions.jsonExtractKey("not a json", "$..**", "maxDepth=2").size(), 0);
++    Assert.assertEquals(JsonFunctions.jsonExtractKey("{\"a\":1}", "$..**", "maxDepth=0").size(), 0);
++  }
++
++  @Test
++  public void testJsonKeysEdgeCases()
++      throws IOException {
++    // Test with negative depth
++    Assert.assertEquals(JsonFunctions.jsonExtractKey("{\"a\":1}", "$..**", "maxDepth=-1").size(), 1);
++
++    // Test with empty string
++    Assert.assertEquals(JsonFunctions.jsonExtractKey("", "$..**", "maxDepth=1").size(), 0);
++
++    // Test with null JSON value
++    Assert.assertEquals(JsonFunctions.jsonExtractKey("null", "$..**", "maxDepth=1").size(), 0);
++
++    // Test with empty JSON object
++    Assert.assertEquals(JsonFunctions.jsonExtractKey("{}", "$..**", "maxDepth=1").size(), 0);
++
++    // Test with empty JSON array
++    Assert.assertEquals(JsonFunctions.jsonExtractKey("[]", "$..**", "maxDepth=1").size(), 0);
++
++    // Test with various object types
++    Map<String, Object> mapObj = new java.util.HashMap<>();
++    mapObj.put("key1", "value1");
++    mapObj.put("key2", 42);
++    List<String> mapResult = JsonFunctions.jsonExtractKey(mapObj, "$..**", "maxDepth=1");
++    System.out.println("Map result: " + mapResult);
++    Assert.assertTrue(mapResult.size() > 0);
++
++    List<Object> listObj = new java.util.ArrayList<>();
++    listObj.add(Map.of("key1", "value1"));
++    listObj.add(Map.of("key2", "value2"));
++    List<String> listResult = JsonFunctions.jsonExtractKey(listObj, "$..**", "maxDepth=2");
++    System.out.println("List result: " + listResult);
++    Assert.assertTrue(listResult.size() > 0);
++
++    String deepJson = "{\"a\":{\"b\":{\"c\":{\"d\":1}}}}";
++    List<String> deepResult = JsonFunctions.jsonExtractKey(deepJson, "$..**", "maxDepth=3");
++    System.out.println("Deep result: " + deepResult);
++    Assert.assertTrue(deepResult.size() > 0);
++  }
++
++  @Test
++  public void testJsonExtractKeyDotNotation()
++      throws IOException {
++    String nestedJson = "{\"a\":1,\"b\":{\"c\":2,\"d\":{\"e\":3}}}";
++
++    // Test 4-parameter version with dotNotation=true
++    List<String> dotNotationResult = JsonFunctions.jsonExtractKey(nestedJson, "$..**", "maxDepth=3;dotNotation=true");
++    List<String> expectedDotNotation = Arrays.asList("a", "b", "b.c", "b.d", "b.d.e");
++    Assert.assertEqualsNoOrder(dotNotationResult.toArray(), expectedDotNotation.toArray());
++
++    // Test 4-parameter version with dotNotation=false (JsonPath format)
++    List<String> jsonPathResult = JsonFunctions.jsonExtractKey(nestedJson, "$..**", "maxDepth=3;dotNotation=false");
++    List<String> expectedJsonPath = Arrays.asList("$['a']", "$['b']", "$['b']['c']", "$['b']['d']", "$['b']['d']['e']");
++    Assert.assertEqualsNoOrder(jsonPathResult.toArray(), expectedJsonPath.toArray());
++
++    // Test with arrays in dot notation
++    String arrayJson = "{\"users\":[{\"name\":\"Alice\"},{\"name\":\"Bob\"}]}";
++    List<String> arrayDotResult = JsonFunctions.jsonExtractKey(arrayJson, "$..**", "maxDepth=3;dotNotation=true");
++    List<String> expectedArrayDot = Arrays.asList("users", "users.0", "users.0.name", "users.1", "users.1.name");
++    Assert.assertEqualsNoOrder(arrayDotResult.toArray(), expectedArrayDot.toArray());
++  }
++
++  @Test
++  public void testJsonExtractKeyDepthLimiting()
++      throws IOException {
++    String deepJson = "{\"a\":{\"b\":{\"c\":{\"d\":1}}}}";
++
++    // Test depth=1 (only top level)
++    List<String> depth1 = JsonFunctions.jsonExtractKey(deepJson, "$..**", "maxDepth=1");
++    Assert.assertEquals(depth1, Arrays.asList("$['a']"));
++
++    // Test depth=2
++    List<String> depth2 = JsonFunctions.jsonExtractKey(deepJson, "$..**", "maxDepth=2");
++    Assert.assertEqualsNoOrder(depth2.toArray(), new String[]{"$['a']", "$['a']['b']"});
++
++    // Test depth=3
++    List<String> depth3 = JsonFunctions.jsonExtractKey(deepJson, "$..**", "maxDepth=3");
++    Assert.assertEqualsNoOrder(depth3.toArray(), new String[]{"$['a']", "$['a']['b']", "$['a']['b']['c']"});
++
++    // Test depth=4 (includes all levels)
++    List<String> depth4 = JsonFunctions.jsonExtractKey(deepJson, "$..**", "maxDepth=4");
++    Assert.assertEqualsNoOrder(depth4.toArray(),
++        new String[]{"$['a']", "$['a']['b']", "$['a']['b']['c']", "$['a']['b']['c']['d']"});
++  }
++
++  @Test
++  public void testJsonExtractKeyRecursiveExpressions()
++      throws IOException {
++    String json = "{\"a\":1,\"b\":{\"c\":2,\"d\":3}}";
++
++    // Test $..**
++    List<String> recursiveResult = JsonFunctions.jsonExtractKey(json, "$..**", "maxDepth=-1");
++    List<String> expected = Arrays.asList("$['a']", "$['b']", "$['b']['c']", "$['b']['d']");
++    Assert.assertEqualsNoOrder(recursiveResult.toArray(), expected.toArray());
++
++    // Test $.. (should work the same as $..**)
++    List<String> dotDotResult = JsonFunctions.jsonExtractKey(json, "$..", "maxDepth=-1");
++    Assert.assertEqualsNoOrder(dotDotResult.toArray(), expected.toArray());
++
++    // Test with mixed object and array structure
++    String mixedJson = "{\"data\":[{\"id\":1,\"info\":{\"name\":\"test\"}}]}";
++    List<String> mixedResult = JsonFunctions.jsonExtractKey(mixedJson, "$..**", "maxDepth=2147483647");
++    List<String> expectedMixed = Arrays.asList(
++        "$['data']", "$['data'][0]", "$['data'][0]['id']", "$['data'][0]['info']", "$['data'][0]['info']['name']");
++    Assert.assertEqualsNoOrder(mixedResult.toArray(), expectedMixed.toArray());
++  }
++
++  @Test
++  public void testJsonExtractKeyArrayHandling()
++      throws IOException {
++    String arrayJson = "[{\"a\":1},{\"b\":2},{\"c\":{\"d\":3}}]";
++
++    // Test recursive extraction from array
++    List<String> result = JsonFunctions.jsonExtractKey(arrayJson, "$..**", "maxDepth=3");
++    List<String> expected = Arrays.asList("$[0]", "$[0]['a']", "$[1]", "$[1]['b']", "$[2]", "$[2]['c']",
++        "$[2]['c']['d']");
++    Assert.assertEqualsNoOrder(result.toArray(), expected.toArray());
++
++    // Test with dot notation
++    List<String> dotResult = JsonFunctions.jsonExtractKey(arrayJson, "$..**", "maxDepth=3;dotNotation=true");
++    List<String> expectedDot = Arrays.asList("0", "0.a", "1", "1.b", "2", "2.c", "2.c.d");
++    Assert.assertEqualsNoOrder(dotResult.toArray(), expectedDot.toArray());
++  }
++
++  @Test
++  public void testJsonExtractKeyComplexStructures()
++      throws IOException {
++    // Test complex nested structure with various data types
++    String complexJson = "{"
++        + "\"users\":{"
++        + "  \"active\":[{\"id\":1,\"profile\":{\"name\":\"Alice\",\"settings\":{\"theme\":\"dark\"}}}],"
++        + "  \"inactive\":[{\"id\":2,\"profile\":{\"name\":\"Bob\"}}]"
++        + "},"
++        + "\"metadata\":{\"version\":\"1.0\",\"tags\":[\"important\",\"test\"]}"
++        + "}";
++
++    // Test with depth limiting
++    List<String> depth2Result = JsonFunctions.jsonExtractKey(complexJson, "$..**", "maxDepth=2;dotNotation=true");
++    Assert.assertTrue(depth2Result.contains("users"));
++    Assert.assertTrue(depth2Result.contains("metadata"));
++    Assert.assertTrue(depth2Result.contains("users.active"));
++    Assert.assertTrue(depth2Result.contains("users.inactive"));
++    Assert.assertTrue(depth2Result.contains("metadata.version"));
++    Assert.assertTrue(depth2Result.contains("metadata.tags"));
++
++    // Ensure we don't get deeper levels
++    Assert.assertFalse(depth2Result.contains("users.active.0"));
++    Assert.assertFalse(depth2Result.contains("metadata.tags.0"));
++  }
++
++  @Test
++  public void testJsonExtractKeyNonRecursiveExpressions()
++      throws IOException {
++    String json = "{\"a\":1,\"b\":{\"c\":2,\"d\":3}}";
++
++    // Test $.*  (top level only)
++    List<String> topLevelResult = JsonFunctions.jsonExtractKey(json, "$.*", "maxDepth=-3");
++    List<String> expectedTopLevel = Arrays.asList("$['a']", "$['b']");
++    Assert.assertEqualsNoOrder(topLevelResult.toArray(), expectedTopLevel.toArray());
++
++    // Test specific path $.b.*
++    List<String> specificResult = JsonFunctions.jsonExtractKey(json, "$.b.*", "maxDepth=-1");
++    List<String> expectedSpecific = Arrays.asList("$['b']['c']", "$['b']['d']");
++    Assert.assertEqualsNoOrder(specificResult.toArray(), expectedSpecific.toArray());
++  }
++
++  @Test
++  public void testJsonExtractKeyEdgeCasesWithDotNotation()
++      throws IOException {
++    // Test with zero depth
++    Assert.assertEquals(JsonFunctions.jsonExtractKey("{\"a\":1}", "$..**", "maxDepth=0;dotNotation=true").size(), 0);
++    Assert.assertEquals(JsonFunctions.jsonExtractKey("{\"a\":1}", "$..**", "maxDepth=0;dotNotation=false").size(), 0);
++
++    // Test with negative depth
++    Assert.assertEquals(JsonFunctions.jsonExtractKey("{\"a\":1}", "$..**", "maxDepth=-1;dotNotation=true").size(), 1);
++    Assert.assertEquals(JsonFunctions.jsonExtractKey("{\"a\":1}", "$..**", "maxDepth=-1;dotNotation=false").size(), 1);
++
++    // Test with empty objects and arrays
++    Assert.assertEquals(JsonFunctions.jsonExtractKey("{}", "$..**", "maxDepth=5;dotNotation=true").size(), 0);
++    Assert.assertEquals(JsonFunctions.jsonExtractKey("[]", "$..**", "maxDepth=5;dotNotation=false").size(), 0);
++
++    // Test with invalid JSON
++    Assert.assertEquals(JsonFunctions.jsonExtractKey("invalid json", "$..**", "maxDepth=5;dotNotation=true").size(), 0);
++    Assert.assertEquals(JsonFunctions.jsonExtractKey(null, "$..**", "maxDepth=5;dotNotation=true").size(), 0);
++  }
++
++  @Test
++  public void testJsonExtractKeyBackwardCompatibility()
++      throws IOException {
++    String json = "{\"a\":1,\"b\":{\"c\":2}}";
++
++    // Test 2-parameter version (should default to maxDepth=Integer.MAX_VALUE, dotNotation=false)
++    List<String> twoParamResult = JsonFunctions.jsonExtractKey(json, "$..**");
++    List<String> fourParamResult = JsonFunctions.jsonExtractKey(json, "$..**", "maxDepth=2147483647;dotNotation=false");
++    Assert.assertEquals(twoParamResult, fourParamResult);
++
++    // Test 3-parameter version (should default to dotNotation=false)
++    List<String> threeParamResult = JsonFunctions.jsonExtractKey(json, "$..**", "maxDepth=2");
++    List<String> fourParamResultWithDepth = JsonFunctions.jsonExtractKey(json, "$..**", "maxDepth=2;dotNotation=false");
++    Assert.assertEquals(threeParamResult, fourParamResultWithDepth);
++  }
++
++  @Test
++  public void testJsonExtractKeySpecialCharacters()
++      throws IOException {
++    String specialJson = "{"
++        + "\"field-with-dash\":1,"
++        + "\"field.with.dots\":2,"
++        + "\"field_with_underscores\":3,"
++        + "\"field with spaces\":4"
++        + "}";
++
++    // Test with special characters in field names
++    List<String> result = JsonFunctions.jsonExtractKey(specialJson, "$..**", "maxDepth=1;dotNotation=true");
++    Assert.assertTrue(result.contains("field-with-dash"));
++    Assert.assertTrue(result.contains("field.with.dots"));
++    Assert.assertTrue(result.contains("field_with_underscores"));
++    Assert.assertTrue(result.contains("field with spaces"));
++
++    // Test JsonPath format
++    List<String> jsonPathResult = JsonFunctions.jsonExtractKey(specialJson, "$..**", "maxDepth=1;dotNotation=false");
++    Assert.assertTrue(jsonPathResult.contains("$['field-with-dash']"));
++    Assert.assertTrue(jsonPathResult.contains("$['field.with.dots']"));
++    Assert.assertTrue(jsonPathResult.contains("$['field_with_underscores']"));
++    Assert.assertTrue(jsonPathResult.contains("$['field with spaces']"));
+   }
+ }
+diff --git a/pinot-common/src/test/java/org/apache/pinot/common/function/scalar/JsonFunctionsUtilTest.java b/pinot-common/src/test/java/org/apache/pinot/common/function/scalar/JsonFunctionsUtilTest.java
+new file mode 100644
+index 0000000000..3834f635fb
+--- /dev/null
++++ b/pinot-common/src/test/java/org/apache/pinot/common/function/scalar/JsonFunctionsUtilTest.java
+@@ -0,0 +1,124 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *   http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing,
++ * software distributed under the License is distributed on an
++ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
++ * KIND, either express or implied.  See the License for the
++ * specific language governing permissions and limitations
++ * under the License.
++ */
++package org.apache.pinot.common.function.scalar;
++
++import org.testng.annotations.Test;
++
++import static org.testng.Assert.assertEquals;
++
++/**
++ * Tests for utility methods in JsonFunctions class
++ */
++public class JsonFunctionsUtilTest {
++
++  @Test
++  public void testConvertToDotNotation() {
++    // Test null and empty cases
++    assertEquals(JsonFunctions.convertToDotNotation(null), "");
++    assertEquals(JsonFunctions.convertToDotNotation(""), "");
++    assertEquals(JsonFunctions.convertToDotNotation("$"), "");
++
++    // Test single level keys
++    assertEquals(JsonFunctions.convertToDotNotation("$['a']"), "a");
++    assertEquals(JsonFunctions.convertToDotNotation("$['name']"), "name");
++
++    // Test array indices
++    assertEquals(JsonFunctions.convertToDotNotation("$[0]"), "0");
++    assertEquals(JsonFunctions.convertToDotNotation("$[123]"), "123");
++
++    // Test multi-level object keys
++    assertEquals(JsonFunctions.convertToDotNotation("$['a']['b']"), "a.b");
++    assertEquals(JsonFunctions.convertToDotNotation("$['user']['profile']['name']"), "user.profile.name");
++
++    // Test mixed object keys and array indices
++    assertEquals(JsonFunctions.convertToDotNotation("$['users'][0]['name']"), "users.0.name");
++    assertEquals(JsonFunctions.convertToDotNotation("$[0]['data'][1]['value']"), "0.data.1.value");
++
++    // Test complex nested structure
++    assertEquals(JsonFunctions.convertToDotNotation("$['a']['b'][2]['c']['d']"), "a.b.2.c.d");
++
++    // Test special characters in keys
++    assertEquals(JsonFunctions.convertToDotNotation("$['field-with-dash']"), "field-with-dash");
++    assertEquals(JsonFunctions.convertToDotNotation("$['field_with_underscores']"), "field_with_underscores");
++    assertEquals(JsonFunctions.convertToDotNotation("$['field with spaces']"), "field with spaces");
++    assertEquals(JsonFunctions.convertToDotNotation("$['field.with.dots']"), "field.with.dots");
++
++    // Test edge cases with brackets
++    assertEquals(JsonFunctions.convertToDotNotation("$['']"), "");
++    assertEquals(JsonFunctions.convertToDotNotation("$['a']['']"), "a.");
++
++    // Test malformed paths (should still process what it can)
++    assertEquals(JsonFunctions.convertToDotNotation("$['a']["), "a[");
++    assertEquals(JsonFunctions.convertToDotNotation("$['a']['b"), "a['b");
++
++    // Test non-standard but possible patterns
++    assertEquals(JsonFunctions.convertToDotNotation("$['0']"), "0");
++    assertEquals(JsonFunctions.convertToDotNotation("$['1']['key']"), "1.key");
++  }
++
++  @Test
++  public void testGetKeyDepth() {
++    // Test null and empty cases
++    assertEquals(JsonFunctions.getKeyDepth(null), 0);
++    assertEquals(JsonFunctions.getKeyDepth(""), 0);
++
++    // Test JsonPath format
++    assertEquals(JsonFunctions.getKeyDepth("$['a']"), 1);
++    assertEquals(JsonFunctions.getKeyDepth("$['a']['b']"), 2);
++    assertEquals(JsonFunctions.getKeyDepth("$['a']['b']['c']"), 3);
++    assertEquals(JsonFunctions.getKeyDepth("$['user']['profile']['settings']['theme']"), 4);
++
++    // Test array indices in JsonPath format
++    assertEquals(JsonFunctions.getKeyDepth("$[0]"), 1);
++    assertEquals(JsonFunctions.getKeyDepth("$[0]['name']"), 2);
++    assertEquals(JsonFunctions.getKeyDepth("$['users'][0]['profile']"), 3);
++
++    // Test dot notation format
++    assertEquals(JsonFunctions.getKeyDepth("a"), 1);
++    assertEquals(JsonFunctions.getKeyDepth("a.b"), 2);
++    assertEquals(JsonFunctions.getKeyDepth("a.b.c"), 3);
++    assertEquals(JsonFunctions.getKeyDepth("user.profile.settings.theme"), 4);
++    assertEquals(JsonFunctions.getKeyDepth("users.0.name"), 3);
++    assertEquals(JsonFunctions.getKeyDepth("data.0.items.1.value"), 5);
++
++    // Test single keys without dots or brackets
++    assertEquals(JsonFunctions.getKeyDepth("name"), 1);
++    assertEquals(JsonFunctions.getKeyDepth("id"), 1);
++    assertEquals(JsonFunctions.getKeyDepth("123"), 1);
++
++    // Test edge cases with dots
++    assertEquals(JsonFunctions.getKeyDepth("."), 0); // Split of "." results in empty array
++    assertEquals(JsonFunctions.getKeyDepth("a."), 1); // "a." appears to be treated as single key
++    assertEquals(JsonFunctions.getKeyDepth(".b"), 2); // Empty string before dot
++    assertEquals(JsonFunctions.getKeyDepth("a..b"), 3); // Empty string between dots
++
++    // Test mixed cases that might appear in real data
++    assertEquals(JsonFunctions.getKeyDepth("field-with-dash"), 1);
++    assertEquals(JsonFunctions.getKeyDepth("field_with_underscores"), 1);
++    assertEquals(JsonFunctions.getKeyDepth("field.with.dots.in.name"), 5);
++
++    // Test complex JsonPath with multiple levels
++    assertEquals(JsonFunctions.getKeyDepth("$['a']['b']['c']['d']['e']"), 5);
++    assertEquals(JsonFunctions.getKeyDepth("$[0][1][2]"), 3);
++
++    // Test malformed JsonPath (should still count brackets)
++    assertEquals(JsonFunctions.getKeyDepth("$['a']["), 2);
++    assertEquals(JsonFunctions.getKeyDepth("$[0]['incomplete"), 2);
++  }
++}
+diff --git a/pinot-core/src/test/java/org/apache/pinot/core/operator/transform/function/JsonExtractScalarTransformFunctionTest.java b/pinot-core/src/test/java/org/apache/pinot/core/operator/transform/function/JsonExtractScalarTransformFunctionTest.java
+index 57a8ae04d9..c65a4295fe 100644
+--- a/pinot-core/src/test/java/org/apache/pinot/core/operator/transform/function/JsonExtractScalarTransformFunctionTest.java
++++ b/pinot-core/src/test/java/org/apache/pinot/core/operator/transform/function/JsonExtractScalarTransformFunctionTest.java
+@@ -438,6 +438,56 @@ public class JsonExtractScalarTransformFunctionTest extends BaseTransformFunctio
+     RequestContextUtils.getExpression(expressionStr);
+   }
+ 
++  @Test
++  public void testJsonExtractKeyWithDepthTransformFunction() {
++    ExpressionContext expression = RequestContextUtils.getExpression("jsonExtractKey(json, '$.*', 'maxDepth=2')");
++    TransformFunction transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
++    Assert.assertTrue(transformFunction instanceof JsonExtractKeyTransformFunction);
++    Assert.assertEquals(transformFunction.getName(), JsonExtractKeyTransformFunction.FUNCTION_NAME);
++    Assert.assertEquals(transformFunction.getResultMetadata().getDataType(), DataType.STRING);
++    Assert.assertFalse(transformFunction.getResultMetadata().isSingleValue());
++
++    // Test with different depth values
++    expression = RequestContextUtils.getExpression("jsonExtractKey(json, '$.*', 'maxDepth=1')");
++    transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
++    Assert.assertTrue(transformFunction instanceof JsonExtractKeyTransformFunction);
++
++    // Test with parameters (depth and dotNotation)
++    expression = RequestContextUtils.getExpression("jsonExtractKey(json, '$.*', 'maxDepth=2;dotNotation=true')");
++    transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
++    Assert.assertTrue(transformFunction instanceof JsonExtractKeyTransformFunction);
++
++    // Test with parameters (depth and dotNotation = false)
++    expression = RequestContextUtils.getExpression("jsonExtractKey(json, '$.*', 'maxDepth=2;dotNotation=false')");
++    transformFunction = TransformFunctionFactory.get(expression, _dataSourceMap);
++    Assert.assertTrue(transformFunction instanceof JsonExtractKeyTransformFunction);
++
++    // Test with an invalid number of arguments (should fail)
++    try {
++      RequestContextUtils.getExpression("jsonExtractKey(json)");
++      Assert.fail("Should have thrown SqlCompilationException");
++    } catch (SqlCompilationException e) {
++      // Expected
++    }
++
++    // Test with too many arguments (should fail)
++    try {
++      RequestContextUtils.getExpression("jsonExtractKey(json, '$.*', 'maxDepth=2;dotNotation=true', 'extra')");
++      Assert.fail("Should have thrown SqlCompilationException");
++    } catch (SqlCompilationException e) {
++      // Expected
++    }
++
++    // Test with invalid optional parameter argument that should fail during initialization
++    try {
++      expression = RequestContextUtils.getExpression("jsonExtractKey(json, '$.*', 'unknownKey=abc')");
++      TransformFunctionFactory.get(expression, _dataSourceMap);
++      Assert.fail("Should have thrown BadQueryRequestException");
++    } catch (BadQueryRequestException e) {
++      // Expected
++    }
++  }
++
+   @DataProvider(name = "testIllegalArguments")
+   public Object[][] testIllegalArguments() {
+     //@formatter:off
+diff --git a/pinot-integration-tests/src/test/java/org/apache/pinot/integration/tests/custom/JsonPathTest.java b/pinot-integration-tests/src/test/java/org/apache/pinot/integration/tests/custom/JsonPathTest.java
+index 0c86019a8d..c9e35d60e6 100644
+--- a/pinot-integration-tests/src/test/java/org/apache/pinot/integration/tests/custom/JsonPathTest.java
++++ b/pinot-integration-tests/src/test/java/org/apache/pinot/integration/tests/custom/JsonPathTest.java
+@@ -212,7 +212,7 @@ public class JsonPathTest extends CustomDataQueryClusterIntegrationTest {
+       Assert.assertEquals(k4.get("k4-k1"), "value-k4-k1-" + i);
+       Assert.assertEquals(k4.get("k4-k2"), "value-k4-k2-" + i);
+       Assert.assertEquals(k4.get("k4-k3"), "value-k4-k3-" + i);
+-      Assert.assertEquals(Double.parseDouble(k4.get("met").toString()), (double) i);
++      Assert.assertEquals(Double.parseDouble(k4.get("met").toString()), i);
+     }
+ 
+     //Filter Query
+@@ -368,4 +368,228 @@ public class JsonPathTest extends CustomDataQueryClusterIntegrationTest {
+     Assert.assertTrue(cache instanceof JsonPathCache);
+     Assert.assertTrue(((JsonPathCache) cache).size() > 0);
+   }
++
++  @Test(dataProvider = "useBothQueryEngines")
++  public void testJsonKeysQueries(boolean useMultiStageQueryEngine)
++      throws Exception {
++    setUseMultiStageQueryEngine(useMultiStageQueryEngine);
++    String query = "SELECT jsonExtractKey(myMapStr, '$.*', 'maxDepth=1') FROM " + getTableName() + " LIMIT 1";
++    JsonNode pinotResponse = postQuery(query);
++    Assert.assertEquals(pinotResponse.get("exceptions").size(), 0);
++    JsonNode rows = pinotResponse.get("resultTable").get("rows");
++    Assert.assertEquals(rows.size(), 1);
++    JsonNode row = rows.get(0);
++    Assert.assertEquals(row.size(), 1);
++    // JsonPath returns keys in JsonPath format like "$['key']"
++    JsonNode keys = row.get(0);
++    Assert.assertTrue(keys.isArray());
++    Assert.assertTrue(keys.size() > 0);
++
++    query = "SELECT jsonExtractKey(complexMapStr, '$.*', 'maxDepth=2') FROM " + getTableName() + " LIMIT 1";
++    pinotResponse = postQuery(query);
++    Assert.assertEquals(pinotResponse.get("exceptions").size(), 0);
++    rows = pinotResponse.get("resultTable").get("rows");
++    Assert.assertEquals(rows.size(), 1);
++    row = rows.get(0);
++    Assert.assertEquals(row.size(), 1);
++    keys = row.get(0);
++    Assert.assertTrue(keys.isArray());
++    Assert.assertTrue(keys.size() > 0);
++
++    query = "SELECT jsonExtractKey(complexMapStr, '$.*', 'maxDepth=3') FROM " + getTableName() + " LIMIT 1";
++    pinotResponse = postQuery(query);
++    Assert.assertEquals(pinotResponse.get("exceptions").size(), 0);
++    rows = pinotResponse.get("resultTable").get("rows");
++    Assert.assertEquals(rows.size(), 1);
++    row = rows.get(0);
++    Assert.assertEquals(row.size(), 1);
++    keys = row.get(0);
++    Assert.assertTrue(keys.isArray());
++    Assert.assertTrue(keys.size() > 0);
++  }
++
++  @Test(dataProvider = "useBothQueryEngines")
++  public void testJsonKeysQueriesWithDotNotation(boolean useMultiStageQueryEngine)
++      throws Exception {
++    setUseMultiStageQueryEngine(useMultiStageQueryEngine);
++
++    // Test optional parameter jsonExtractKey with dotNotation=true (simple JSON)
++    String query =
++        "SELECT jsonExtractKey(myMapStr, '$.*', 'maxDepth=1; dotNotation=true') FROM " + getTableName() + " LIMIT 1";
++    JsonNode pinotResponse = postQuery(query);
++    Assert.assertEquals(pinotResponse.get("exceptions").size(), 0);
++    JsonNode rows = pinotResponse.get("resultTable").get("rows");
++    Assert.assertEquals(rows.size(), 1);
++    JsonNode row = rows.get(0);
++    Assert.assertEquals(row.size(), 1);
++    JsonNode keys = row.get(0);
++    Assert.assertTrue(keys.isArray());
++    Assert.assertEquals(keys.size(), 2); // k1, k2
++    // Should contain simple key names, not JsonPath format
++    List<String> keyList = new ArrayList<>();
++    for (JsonNode key : keys) {
++      keyList.add(key.asText());
++    }
++    Assert.assertTrue(keyList.contains("k1"));
++    Assert.assertTrue(keyList.contains("k2"));
++    // Should NOT contain JsonPath format like "$['k1']"
++    Assert.assertFalse(keyList.contains("$['k1']"));
++    Assert.assertFalse(keyList.contains("$['k2']"));
++
++    // Test optional parameter jsonExtractKey with dotNotation=false (JsonPath format)
++    query =
++        "SELECT jsonExtractKey(myMapStr, '$.*', 'maxDepth=1; dotNotation=false') FROM " + getTableName() + " LIMIT 1";
++    pinotResponse = postQuery(query);
++    Assert.assertEquals(pinotResponse.get("exceptions").size(), 0);
++    rows = pinotResponse.get("resultTable").get("rows");
++    row = rows.get(0);
++    keys = row.get(0);
++    Assert.assertTrue(keys.isArray());
++    Assert.assertEquals(keys.size(), 2);
++    keyList.clear();
++    for (JsonNode key : keys) {
++      keyList.add(key.asText());
++    }
++    // Should contain JsonPath format
++    Assert.assertTrue(keyList.contains("$['k1']"));
++    Assert.assertTrue(keyList.contains("$['k2']"));
++
++    // Test recursive key extraction with dot notation on complex JSON
++    query = "SELECT jsonExtractKey(complexMapStr, '$..**', 'maxDepth=2; dotNotation=true') FROM " + getTableName()
++        + " LIMIT 1";
++    pinotResponse = postQuery(query);
++    Assert.assertEquals(pinotResponse.get("exceptions").size(), 0);
++    rows = pinotResponse.get("resultTable").get("rows");
++    row = rows.get(0);
++    keys = row.get(0);
++    Assert.assertTrue(keys.isArray());
++    Assert.assertTrue(keys.size() >= 4); // At least k1, k2, k3, k4
++    keyList.clear();
++    for (JsonNode key : keys) {
++      keyList.add(key.asText());
++    }
++    // Should contain top-level keys in dot notation
++    Assert.assertTrue(keyList.contains("k1"));
++    Assert.assertTrue(keyList.contains("k2"));
++    Assert.assertTrue(keyList.contains("k3"));
++    Assert.assertTrue(keyList.contains("k4"));
++
++    // Test recursive key extraction with JsonPath format
++    query = "SELECT jsonExtractKey(complexMapStr, '$..**', 'maxDepth=2; dotNotation=false') FROM " + getTableName()
++        + " LIMIT 1";
++    pinotResponse = postQuery(query);
++    Assert.assertEquals(pinotResponse.get("exceptions").size(), 0);
++    rows = pinotResponse.get("resultTable").get("rows");
++    row = rows.get(0);
++    keys = row.get(0);
++    Assert.assertTrue(keys.isArray());
++    keyList.clear();
++    for (JsonNode key : keys) {
++      keyList.add(key.asText());
++    }
++    // Should contain JsonPath format
++    Assert.assertTrue(keyList.contains("$['k1']"));
++    Assert.assertTrue(keyList.contains("$['k2']"));
++    Assert.assertTrue(keyList.contains("$['k3']"));
++    Assert.assertTrue(keyList.contains("$['k4']"));
++
++    // Test deeper recursive extraction with dot notation
++    query = "SELECT jsonExtractKey(complexMapStr, '$..**', 'maxDepth=3; dotNotation=true') FROM " + getTableName()
++        + " LIMIT 1";
++    pinotResponse = postQuery(query);
++    Assert.assertEquals(pinotResponse.get("exceptions").size(), 0);
++    rows = pinotResponse.get("resultTable").get("rows");
++    row = rows.get(0);
++    keys = row.get(0);
++    Assert.assertTrue(keys.isArray());
++    Assert.assertTrue(keys.size() > 4); // Should include nested keys
++    keyList.clear();
++    for (JsonNode key : keys) {
++      keyList.add(key.asText());
++    }
++    // Should contain nested keys in dot notation
++    Assert.assertTrue(keyList.contains("k4.k4-k1"));
++    Assert.assertTrue(keyList.contains("k4.k4-k2"));
++    Assert.assertTrue(keyList.contains("k4.k4-k3"));
++    Assert.assertTrue(keyList.contains("k4.met"));
++    // Should contain array indices in dot notation
++    Assert.assertTrue(keyList.contains("k3.0"));
++    Assert.assertTrue(keyList.contains("k3.1"));
++    Assert.assertTrue(keyList.contains("k3.2"));
++
++    // Test deeper recursive extraction with JsonPath format
++    query = "SELECT jsonExtractKey(complexMapStr, '$..**', 'maxDepth=3; dotNotation=false') FROM " + getTableName()
++        + " LIMIT 1";
++    pinotResponse = postQuery(query);
++    Assert.assertEquals(pinotResponse.get("exceptions").size(), 0);
++    rows = pinotResponse.get("resultTable").get("rows");
++    row = rows.get(0);
++    keys = row.get(0);
++    Assert.assertTrue(keys.isArray());
++    keyList.clear();
++    for (JsonNode key : keys) {
++      keyList.add(key.asText());
++    }
++    // Should contain nested keys in JsonPath format
++    Assert.assertTrue(keyList.contains("$['k4']['k4-k1']"));
++    Assert.assertTrue(keyList.contains("$['k4']['k4-k2']"));
++    Assert.assertTrue(keyList.contains("$['k4']['k4-k3']"));
++    Assert.assertTrue(keyList.contains("$['k4']['met']"));
++    // Should contain array indices in JsonPath format
++    Assert.assertTrue(keyList.contains("$['k3'][0]"));
++    Assert.assertTrue(keyList.contains("$['k3'][1]"));
++    Assert.assertTrue(keyList.contains("$['k3'][2]"));
++
++    // Test specific path extraction with dot notation
++    query = "SELECT jsonExtractKey(complexMapStr, '$.k4.*', 'maxDepth=2; dotNotation=true') FROM " + getTableName()
++        + " LIMIT 1";
++    pinotResponse = postQuery(query);
++    Assert.assertEquals(pinotResponse.get("exceptions").size(), 0);
++    rows = pinotResponse.get("resultTable").get("rows");
++    row = rows.get(0);
++    keys = row.get(0);
++    Assert.assertTrue(keys.isArray());
++    Assert.assertEquals(keys.size(), 4); // k4-k1, k4-k2, k4-k3, met
++    keyList.clear();
++    for (JsonNode key : keys) {
++      keyList.add(key.asText());
++    }
++    // Should contain nested keys in dot notation format
++    Assert.assertTrue(keyList.contains("k4.k4-k1"));
++    Assert.assertTrue(keyList.contains("k4.k4-k2"));
++    Assert.assertTrue(keyList.contains("k4.k4-k3"));
++    Assert.assertTrue(keyList.contains("k4.met"));
++
++    // Test backward compatibility - 2-parameter version should default to JsonPath format
++    query = "SELECT jsonExtractKey(myMapStr, '$.*') FROM " + getTableName() + " LIMIT 1";
++    pinotResponse = postQuery(query);
++    Assert.assertEquals(pinotResponse.get("exceptions").size(), 0);
++    rows = pinotResponse.get("resultTable").get("rows");
++    row = rows.get(0);
++    keys = row.get(0);
++    Assert.assertTrue(keys.isArray());
++    keyList.clear();
++    for (JsonNode key : keys) {
++      keyList.add(key.asText());
++    }
++    // Should default to JsonPath format
++    Assert.assertTrue(keyList.contains("$['k1']"));
++    Assert.assertTrue(keyList.contains("$['k2']"));
++
++    // Test backward compatibility - no dotNotation should default to JsonPath format
++    query = "SELECT jsonExtractKey(myMapStr, '$.*', 'maxDepth=1') FROM " + getTableName() + " LIMIT 1";
++    pinotResponse = postQuery(query);
++    Assert.assertEquals(pinotResponse.get("exceptions").size(), 0);
++    rows = pinotResponse.get("resultTable").get("rows");
++    row = rows.get(0);
++    keys = row.get(0);
++    Assert.assertTrue(keys.isArray());
++    keyList.clear();
++    for (JsonNode key : keys) {
++      keyList.add(key.asText());
++    }
++    // Should default to JsonPath format
++    Assert.assertTrue(keyList.contains("$['k1']"));
++    Assert.assertTrue(keyList.contains("$['k2']"));
++  }
+ }

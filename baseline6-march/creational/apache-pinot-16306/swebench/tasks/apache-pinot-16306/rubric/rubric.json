@@ -1,0 +1,30 @@
+{
+  "functional": [
+    {
+      "id": "functional-1",
+      "description": "[TODO] Edit the functional requirements as needed. Feel free to add/remove/modify. Everything specified in the prompt should be included (even if it is already checked in the tests)",
+      "weight": "major|minor",
+      "rationale": "[TODO] Explain why this requirement matters",
+      "source": "prompt",
+      "dependent_on": []
+    }
+  ],
+  "robustness": [
+    {
+      "id": "robustness-1",
+      "description": "[TODO] Write 1–10 criteria related to maintainability, scalability, or other best practices — items that a senior engineer would expect, but that a functional solution could exist without.",
+      "weight": "major|minor",
+      "rationale": "[TODO] Explain why this matters",
+      "dependent_on": []
+    }
+  ],
+  "style": [
+    {
+      "id": "style-1",
+      "description": "[TODO] Write 1–10 criteria specific to this repository's formatting or style conventions that wouldn't be caught by linting.",
+      "weight": "major|minor",
+      "rationale": "[TODO] Explain why this matters",
+      "dependent_on": []
+    }
+  ]
+}
